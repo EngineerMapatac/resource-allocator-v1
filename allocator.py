@@ -1,103 +1,135 @@
 import json
-import math
+import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
+import math
 
 class ResourceAllocator:
     def __init__(self, config_file):
         self.config_file = config_file
-        self.system_capacity = 0  # Your Monthly Payment Budget
-        self.nodes = []           # Your Loans
-        self.report_log = []
+        self.capacity_per_cycle = 0  
+        self.start_date = datetime.now()
+        self.nodes = []
+        self.history = {"dates": [], "total_load": []}
 
     def load_configuration(self):
-        """Loads the external dependencies (loans) from the JSON file."""
         try:
             with open(self.config_file, 'r') as f:
                 data = json.load(f)
-                self.system_capacity = data.get("monthly_system_capacity", 0)
+                self.capacity_per_cycle = data.get("system_capacity_per_cycle", 0)
+                
+                # Parse Start Date
+                s_date = data.get("start_date", datetime.now().strftime("%Y-%m-%d"))
+                self.start_date = datetime.strptime(s_date, "%Y-%m-%d")
+
                 self.nodes = data.get("active_nodes", [])
                 
-                # Sort nodes by 'overhead_factor' (Interest Rate) descending
-                # This is the "Avalanche Method" - mathematically fastest way to clear debt
+                # Sort by Interest Rate (Avalanche)
                 self.nodes.sort(key=lambda x: x['overhead_factor'], reverse=True)
                 
-            print(f"[INIT] Configuration loaded. System Capacity: {self.system_capacity} units/mo")
+            print(f"[INIT] System Online. Capacity: {self.capacity_per_cycle} units/cycle")
         except FileNotFoundError:
-            print(f"[ERROR] Configuration file '{self.config_file}' not found.")
+            print(f"[ERROR] Config file '{self.config_file}' missing.")
 
     def run_simulation(self):
-        """Simulates the resource allocation cycle month by month."""
-        month = 0
-        total_overhead_cost = 0 # Total Interest Paid
+        cycle = 0
+        current_date = self.start_date
         
-        # Deep copy of nodes to not mess up original data during simulation
-        active_nodes = [n.copy() for n in self.nodes]
+        # Initial State
+        current_total_load = sum(n['current_load'] for n in self.nodes)
+        self.history["dates"].append(current_date)
+        self.history["total_load"].append(current_total_load)
 
-        while any(n['current_load'] > 0 for n in active_nodes):
-            month += 1
-            monthly_overhead = 0
-            remaining_capacity = self.system_capacity
+        # SIMULATION LOOP (1 Cycle = Approx 15 Days)
+        while any(n['current_load'] > 0 for n in self.nodes):
+            cycle += 1
+            # Advance time by ~15 days (alternating 15th and 30th logic simplified)
+            current_date += timedelta(days=15) 
+            
+            remaining_capacity = self.capacity_per_cycle
+            
+            for node in self.nodes:
+                if node['current_load'] <= 0:
+                    continue
 
-            # 1. Apply Overhead (Interest) & Deduct Minimum Throughput (Min Payments)
-            for node in active_nodes:
-                if node['current_load'] > 0:
-                    # Calculate Interest for this month
-                    overhead = (node['current_load'] * node['overhead_factor']) / 12
-                    monthly_overhead += overhead
-                    node['current_load'] += overhead
+                # 1. DETECT IF PAYMENT IS DUE THIS CYCLE
+                # If mode is SEMI_MONTHLY, pay every cycle.
+                # If mode is MONTHLY, pay only on even cycles (approx every 30 days).
+                is_payment_due = True
+                if node.get('cycle_mode') == "MONTHLY" and (cycle % 2 != 0):
+                    is_payment_due = False
+
+                if is_payment_due:
+                    # ADD INTEREST (Overhead)
+                    # Annual Rate / 24 (since there are 24 cycles in a year)
+                    interest = (node['current_load'] * node['overhead_factor']) / 24
+                    node['current_load'] += interest
                     
-                    # Pay Minimum
-                    payment = min(node['current_load'], node['min_throughput'])
+                    # PAY MINIMUM
+                    min_pay = node['min_throughput']
+                    # If semi-monthly, split monthly min payment in half? 
+                    # Usually, loans specify monthly min. Let's assume input is PER PAYMENT.
+                    payment = min(node['current_load'], min_pay)
                     node['current_load'] -= payment
                     remaining_capacity -= payment
 
-            # 2. Allocate Remaining Capacity (Snowball/Avalanche) to highest priority node
-            # We already sorted by overhead_factor (Interest Rate) in load_configuration
-            for node in active_nodes:
+            # 2. AVALANCHE (Extra money goes to highest interest loan)
+            for node in self.nodes:
                 if remaining_capacity <= 0:
                     break
                 if node['current_load'] > 0:
-                    payment = min(node['current_load'], remaining_capacity)
-                    node['current_load'] -= payment
-                    remaining_capacity -= payment
+                    # Only pay extra if payment is allowed this cycle
+                    if node.get('cycle_mode') == "SEMI_MONTHLY" or (cycle % 2 == 0):
+                        payment = min(node['current_load'], remaining_capacity)
+                        node['current_load'] -= payment
+                        remaining_capacity -= payment
 
-            total_overhead_cost += monthly_overhead
-            
-            # Check for infinite loop (if interest > payment)
-            if month > 600: # 50 years cap
-                print("[CRITICAL WARNING] Resource leak detected. Overhead exceeds throughput.")
+            # Record History
+            total_load = sum(n['current_load'] for n in self.nodes)
+            self.history["dates"].append(current_date)
+            self.history["total_load"].append(total_load)
+
+            # Safety Break (20 Years)
+            if cycle > 480: 
+                print("[CRITICAL] Infinite loop. Debt not decreasing.")
                 return
 
-        self._generate_final_report(month, total_overhead_cost)
+        self._generate_report(current_date)
+        self._render_graph()
 
-    def _generate_final_report(self, months, total_overhead):
-        today = datetime.now()
-        completion_date = today + timedelta(days=months*30)
+    def _generate_report(self, finish_date):
+        print("\n--- MATURITY ANALYSIS REPORT ---")
+        print(f"Projected Zero Date: {finish_date.strftime('%Y-%m-%d')}")
         
-        print("\n--- SYSTEM OPTIMIZATION REPORT ---")
-        print(f"Total Iterations (Months): {months}")
-        print(f"Projected Release Date:    {completion_date.strftime('%B %Y')}")
-        print(f"Total Overhead Waste:      {total_overhead:,.2f} units")
-        print("----------------------------------")
-        print("[SUCCESS] All external dependencies resolved.")
+        # CHECK AGAINST SCHEDULED DEPRECATION (Maturity Dates)
+        print("\n[DEPENDENCY AUDIT]")
+        for node in self.nodes:
+            # We assume the node is finished now.
+            maturity_str = node.get('scheduled_deprecation')
+            if maturity_str:
+                maturity_date = datetime.strptime(maturity_str, "%Y-%m-%d")
+                days_diff = (maturity_date - finish_date).days
+                
+                if days_diff >= 0:
+                    print(f"[PASS] {node['id']} cleared before maturity. (Buffer: {days_diff} days)")
+                else:
+                    print(f"[FAIL] {node['id']} EXCEEDED scheduled maturity by {abs(days_diff)} days!")
+            else:
+                print(f"[INFO] {node['id']} has no fixed maturity date.")
+
+    def _render_graph(self):
+        plt.figure(figsize=(10, 6))
+        plt.plot(self.history["dates"], self.history["total_load"], color='#2c3e50', label='Total Load')
+        plt.title('Resource Deprecation (Bi-Monthly Cycles)')
+        plt.xlabel('Timeline')
+        plt.ylabel('Remaining Load')
+        plt.grid(True, linestyle='--', alpha=0.5)
+        plt.fill_between(self.history["dates"], self.history["total_load"], color='#e74c3c', alpha=0.1)
+        plt.legend()
+        plt.xticks(rotation=45)
+        plt.tight_layout()
+        plt.show()
 
 if __name__ == "__main__":
-    # Create a dummy config file if it doesn't exist for testing
-    # You should edit 'config/dependencies.json' with your REAL data later.
-    import os
-    if not os.path.exists('config/dependencies.json'):
-        os.makedirs('config', exist_ok=True)
-        dummy_data = {
-            "monthly_system_capacity": 5000, 
-            "active_nodes": [
-                {"id": "NODE_A", "current_load": 20000, "overhead_factor": 0.15, "min_throughput": 500},
-                {"id": "NODE_B", "current_load": 5000, "overhead_factor": 0.05, "min_throughput": 200}
-            ]
-        }
-        with open('config/dependencies.json', 'w') as f:
-            json.dump(dummy_data, f, indent=4)
-        print("[SETUP] Created dummy 'config/dependencies.json'. Edit this file with real data.")
-
     app = ResourceAllocator('config/dependencies.json')
     app.load_configuration()
     app.run_simulation()
