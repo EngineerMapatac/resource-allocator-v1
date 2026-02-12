@@ -1,0 +1,22 @@
+{
+  "system_capacity_per_cycle": 3000,  // Budget per PAYDAY (not per month)
+  "start_date": "2023-11-15",         // When you start this tracker
+  "active_nodes": [
+    {
+      "id": "Bank_Loan_A",
+      "current_load": 45000,          
+      "overhead_factor": 0.035,       // Interest Rate (Annual)
+      "min_throughput": 1500,         // Minimum payment required
+      "cycle_mode": "SEMI_MONTHLY",   // Paid every cutoff (15th & 30th)
+      "scheduled_deprecation": "2024-11-30" // MATURITY DATE (Optional)
+    },
+    {
+      "id": "Personal_Debt_B",
+      "current_load": 5000,
+      "overhead_factor": 0.0,
+      "min_throughput": 1000,
+      "cycle_mode": "MONTHLY",        // Paid once a month only
+      "scheduled_deprecation": null   // No fixed maturity date
+    }
+  ]
+}
